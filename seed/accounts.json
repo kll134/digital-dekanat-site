@@ -1,0 +1,70 @@
+[
+ {
+  "login": "student1",
+  "role": "student",
+  "passHash": "scrypt$16384$8$1$DL0Joak9gxHy4zndDSkePA==$t/5rKbRuPJS6Df6AUwimAPQEnIC/jDq5URf5cFdzGcNon4jHe90vIoxKRCPakFT199h9pw3gFhXHC081vKOAKQ=="
+ },
+ {
+  "login": "student2",
+  "role": "student",
+  "passHash": "scrypt$16384$8$1$4Pk9opGg/HVBgTqG+x9kVg==$hFJTaXqhtaVIABj3CnD3CD89LhYGVP8cOD4LRWXILgUwfojUjjU25AE7B6vJkBtZMRILPxNcH3n9vd6JzLD+6A=="
+ },
+ {
+  "login": "dekanat",
+  "role": "staff",
+  "passHash": "scrypt$16384$8$1$Ex865ykYCeKy9py7iCPD4Q==$PsPr03XOufrwik5Ham/VBNon3uG14QhEkGBfD7dEiRL5LJB3PsdSMA5c2QVxvYsPW64FYAWRQGyxrKQH0dREzg==",
+  "full": "Ковалёва Наталья Петровна",
+  "profile": {
+   "short": "Ковалёва Н. П.",
+   "first": "Наталья Петровна",
+   "ini": "НК",
+   "post": "Методист деканата"
+  }
+ },
+ {
+  "login": "x-ilin",
+  "role": "student",
+  "full": "Ильин Кирилл Олегович",
+  "grp": "ПИ-26-1",
+  "requests": [
+   {
+    "no": "МФЦ-48101",
+    "t": "Справка для военкомата",
+    "purpose": "по месту жительства",
+    "st": "wait",
+    "at": "2026-11-10T09:41:00+03:00"
+   }
+  ]
+ },
+ {
+  "login": "x-safronova",
+  "role": "student",
+  "full": "Сафронова Дарья Игоревна",
+  "grp": "ГМУ-23-2",
+  "requests": [
+   {
+    "no": "МФЦ-48095",
+    "t": "Заявление",
+    "purpose": "материальная помощь",
+    "st": "work",
+    "at": "2026-11-09T17:20:00+03:00"
+   }
+  ]
+ },
+ {
+  "login": "x-petrov",
+  "role": "student",
+  "full": "Петров Артём Сергеевич",
+  "grp": "ЭК-25-3",
+  "requests": [
+   {
+    "no": "МФЦ-48088",
+    "t": "Студенческий билет",
+    "purpose": "перевыпуск при утере",
+    "st": "ok",
+    "note": "Билет выдан в студенческом офисе",
+    "at": "2026-11-08T11:05:00+03:00"
+   }
+  ]
+ }
+]
