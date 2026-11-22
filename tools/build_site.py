@@ -33,7 +33,7 @@ cut("const XDEF=()=>[", "}];", "const XDEF=()=>[];")
 # tick() в исходном прототипе уже защищён от вызова до входа; часы обновляются до раннего выхода.
 
 # 3. Вход: старый обработчик (проверка в браузере) убираем, новый — в site_client.js
-cut("$('#lgForm').addEventListener('submit',async e=>{", "$$('[data-demo]')", "$$('[data-demo]')", include_end=True)
+cut("$('#lgForm').addEventListener('submit',async e=>{", "$('#pwEye').addEventListener", "$('#pwEye').addEventListener", include_end=True)
 
 # 4. Заявки создаются на сервере
 rep("""  const s=SVC[b.dataset.act]; const no='МФЦ-'+(48210+S.reqs.length);
@@ -49,7 +49,6 @@ rep("const X=(()=>{try{return JSON.parse(store.get('digital-dekanat-news')||'[]'
 # 6. Тексты
 s = s.replace('<html>','<html lang="ru">',1)
 s = s.replace('<meta charset=utf8>', '<meta charset=utf8><link rel="icon" href="/favicon.svg" type="image/svg+xml">', 1)
-rep("Это демонстрационный прототип. Настоящие логины и пароли РАНХиГС здесь не используются.", "Это демонстрационный прототип для конкурса. Настоящие логины и пароли РАНХиГС здесь не используются.")
 rep("Хранится только в зашифрованном виде (хэш), его не видят даже сотрудники", "На сервере хранится только хэш scrypt с солью: пароль не видят даже администраторы")
 
 # 6b. Заглушки с именами в разметке очищаем — их заполнит сервер

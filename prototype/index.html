@@ -739,17 +739,6 @@ body.locked .app,body.locked .tabbar{visibility:hidden}
 .lg-caps.on{display:block}
 @keyframes shake{20%,60%{transform:translateX(-5px)}40%,80%{transform:translateX(5px)}}
 .field input.bad{border-color:var(--crit);box-shadow:0 0 0 3px var(--crit-soft)}
-.demo{width:100%;max-width:420px;border:1px solid var(--line-2);border-radius:18px;background:var(--surface);padding:14px;box-shadow:var(--shadow)}
-.demo-h{display:flex;align-items:center;gap:8px;font-size:12px;font-weight:600;color:var(--muted);letter-spacing:.08em;text-transform:uppercase;padding:2px 4px 10px}
-.demo-acc{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:12px;align-items:center;width:100%;text-align:left;padding:10px;border-radius:12px;transition:background .2s}
-.demo-acc:hover{background:var(--surface-2)}
-.demo-acc .av{width:38px;height:38px;border-radius:11px;display:grid;place-items:center;font-weight:700;font-size:13px;background:var(--accent-soft);color:var(--accent)}
-.demo-acc b{display:block;font-size:14px;font-weight:600}
-.demo-acc small{font-size:12px;color:var(--muted)}
-.demo-acc .go{font-size:13px;font-weight:600;color:var(--accent);display:inline-flex;align-items:center;gap:4px}
-.demo-acc.soon{opacity:.55;cursor:default}
-.demo-acc.soon:hover{background:none}
-.lg-legal{font-size:12px;color:var(--faint);max-width:420px}
 
 /* loading skeleton */
 .boot{position:fixed;inset:0;z-index:85;background:var(--bg);display:none;padding:28px 32px;gap:20px;grid-template-columns:240px minmax(0,1fr)}
@@ -904,7 +893,7 @@ body.locked .app,body.locked .tabbar{visibility:hidden}
   .lg-art>p{font-size:14px}
   .lg-feats,.lg-note{display:none}
   .lg-side{padding:22px 16px 40px;justify-content:flex-start;align-items:stretch}
-  .lg-form,.demo,.lg-legal{max-width:none}
+  .lg-form{max-width:none}
   .lg-form h2{font-size:22px}
   .boot{grid-template-columns:1fr;padding:16px}
   .boot .col:first-child{display:none}
@@ -1364,20 +1353,12 @@ html[data-theme="dark"] .nl-cat.k-study{color:#AEB5D6}
   <section class="lg-side">
     <form class="lg-form" id="lgForm" novalidate>
       <h2>Вход в личный кабинет</h2>
-      <p>Логин и пароль студента</p>
-      <div class="field"><label for="lgLogin">Логин</label><input id="lgLogin" type="text" autocomplete="username" autocapitalize="none" spellcheck="false" placeholder="Например, student1"></div>
-      <div class="field"><label for="lgPass">Пароль</label><div class="pw-wrap"><input id="lgPass" type="password" autocomplete="current-password" placeholder="Пароль"><button type="button" class="pw-eye" id="pwEye" aria-label="Показать пароль"><span data-ic="eye" data-s="18"></span></button></div><span class="lg-caps" id="lgCaps">Включён Caps Lock</span></div>
+      <div class="field"><label for="lgLogin">Логин</label><input id="lgLogin" type="text" autocomplete="username" autocapitalize="none" spellcheck="false"></div>
+      <div class="field"><label for="lgPass">Пароль</label><div class="pw-wrap"><input id="lgPass" type="password" autocomplete="current-password"><button type="button" class="pw-eye" id="pwEye" aria-label="Показать пароль"><span data-ic="eye" data-s="18"></span></button></div><span class="lg-caps" id="lgCaps">Включён Caps Lock</span></div>
       <div class="lg-err" id="lgErr" role="alert"></div>
       <div class="lg-row"><label class="check"><input type="checkbox" id="lgRemember" checked>Запомнить меня</label><button type="button" class="link-btn" id="lgForgot">Забыли пароль?</button></div>
       <button class="btn btn-primary lg-submit" id="lgBtn" type="submit"><span data-ic="lock" data-s="17"></span>Войти</button>
     </form>
-    <div class="demo">
-      <div class="demo-h"><span data-ic="users" data-s="15"></span>Демо-доступ для жюри</div>
-      <button class="demo-acc" data-demo="student1"><span class="av">АВ</span><span><b>Анастасия Воронцова</b><small class="mono">student1 · demo2026</small></span><span class="go">Войти<span data-ic="arrow" data-s="14"></span></span></button>
-      <button class="demo-acc" data-demo="student2"><span class="av">МЕ</span><span><b>Максим Ершов</b><small class="mono">student2 · demo2026</small></span><span class="go">Войти<span data-ic="arrow" data-s="14"></span></span></button>
-      <button class="demo-acc staff-acc" data-demo="dekanat"><span class="av">НК</span><span><b>Сотрудник деканата</b><small class="mono">dekanat · demo2026</small></span><span class="go">Войти<span data-ic="arrow" data-s="14"></span></span></button>
-    </div>
-    <p class="lg-legal">Это демонстрационный прототип. Настоящие логины и пароли РАНХиГС здесь не используются.</p>
   </section>
 </div>
 <div class="boot" id="boot" aria-hidden="true">
@@ -2868,7 +2849,7 @@ $('#lgForm').addEventListener('submit',async e=>{
   const b=$('#lgBtn'); b.disabled=true; b.innerHTML='<span class="spin"></span>Проверяем…';
   const u=USERS[l]||STAFF[l], h=await sha('dd-salt:'+l+':'+p);
   await new Promise(r=>setTimeout(r,650));
-  const ok=u&&(h?h===u.h:p==='demo2026');
+  const ok=!!(u&&h&&h===u.h);
   if(!ok){
     tries++; if(tries>=5){lockUntil=Date.now()+30e3;tries=0}
     b.disabled=false; b.innerHTML=ic('lock',17)+'Войти'; pi.value=''; pi.classList.add('bad'); pi.focus();
@@ -2878,11 +2859,10 @@ $('#lgForm').addEventListener('submit',async e=>{
   store.set(SKEY,JSON.stringify({u:l}));
   (()=>{try{history.replaceState(null,'','#home')}catch(e){}})(); startSession(l,true);
 });
-$$('[data-demo]').forEach(b=>b.addEventListener('click',()=>{$('#lgLogin').value=b.dataset.demo;$('#lgPass').value='demo2026';$('#lgForm').requestSubmit()}));
 $('#pwEye').addEventListener('click',()=>{const p=$('#lgPass'),show=p.type==='password';p.type=show?'text':'password';$('#pwEye').innerHTML=ic(show?'eyeoff':'eye',18);$('#pwEye').setAttribute('aria-label',show?'Скрыть пароль':'Показать пароль')});
 ['keydown','keyup'].forEach(t=>$('#lgPass').addEventListener(t,e=>{if(e.getModifierState)$('#lgCaps').classList.toggle('on',e.getModifierState('CapsLock'))}));
 $$('#lgForm input').forEach(i=>i.addEventListener('input',()=>{i.classList.remove('bad');$('#lgErr').classList.remove('on')}));
-$('#lgForgot').addEventListener('click',()=>toast('Восстановление пароля','Ссылка придёт на студенческую почту. В демо используйте кнопки ниже.',{icon:'lock',tone:'info'}));
+$('#lgForgot').addEventListener('click',()=>toast('Восстановление пароля','Для восстановления доступа обратитесь в деканат.',{icon:'lock',tone:'info'}));
 function logout(){store.del(SKEY);closeModal();current=null;(()=>{try{history.replaceState(null,'','#home')}catch(e){}})();showLogin();toast('Вы вышли из аккаунта','Данные кабинета скрыты',{icon:'lock',tone:'info'})}
 $('#logoutBtn').addEventListener('click',logout);
 $('#logoutRail').addEventListener('click',logout);
