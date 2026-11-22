@@ -17,6 +17,8 @@ const PORT = Number(process.env.PORT || 3000);
 const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'data');
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const SEED_DIR = path.join(__dirname, 'seed');
+const SUBMISSIONS_DIR = path.join(DATA_DIR, 'submissions');
+fs.mkdirSync(SUBMISSIONS_DIR, { recursive: true });
 const COOKIE = 'dd_sid';
 const SESSION_TTL_SHORT = 12 * 3600e3;      // без «Запомнить меня»
 const SESSION_TTL_LONG = 7 * 24 * 3600e3;   // с «Запомнить меня»
@@ -55,6 +57,18 @@ db.exec(`
     created INTEGER NOT NULL,
     updated INTEGER NOT NULL,
     seen INTEGER NOT NULL DEFAULT 1 -- 0 = студент ещё не видел изменение статуса
+  );
+  CREATE TABLE IF NOT EXISTS submissions (
+    id INTEGER PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    task_id TEXT NOT NULL,
+    task_title TEXT NOT NULL,
+    file_name TEXT NOT NULL,
+    stored_name TEXT NOT NULL,
+    mime_type TEXT NOT NULL,
+    size INTEGER NOT NULL,
+    created INTEGER NOT NULL,
+    UNIQUE(user_id, task_id)
   );
   CREATE TABLE IF NOT EXISTS news (
     id INTEGER PRIMARY KEY,
@@ -114,6 +128,69 @@ function seed() {
   } catch (e) { db.exec('ROLLBACK'); throw e; }
 }
 seed();
+// Синхронизируем демо-профили с seed при каждом запуске, чтобы обновлённые
+// расписание, курс, дисциплины и типы занятий применялись и к уже созданной БД.
+try {
+  const seeded = JSON.parse(fs.readFileSync(path.join(SEED_DIR, 'students.json'), 'utf8'));
+  const update = db.prepare('UPDATE users SET profile = ?, grp = ? WHERE login = ?');
+  for (const login of ['student1', 'student2']) {
+    const s = seeded[login];
+    const row = db.prepare('SELECT id, profile FROM users WHERE login = ?').get(login);
+    if (!s || !row) continue;
+    const profile = { ...JSON.parse(row.profile || '{}'), ...s };
+    update.run(JSON.stringify(profile), s.grp || null, login);
+  }
+} catch (e) { console.error('Не удалось синхронизировать демо-профили:', e.message); }
+
+// Идемпотентное расширение демо-каталога методиста. Не очищает и не пересоздаёт
+// существующую БД: добавляет только отсутствующие учебные карточки и обращения.
+try {
+  const catalog = JSON.parse(fs.readFileSync(path.join(SEED_DIR, 'directory.json'), 'utf8'));
+  const findUser = db.prepare('SELECT id, role, full_name, grp, profile FROM users WHERE login = ?');
+  const addUser = db.prepare("INSERT INTO users (login, role, pass_hash, full_name, grp, profile) VALUES (?, 'student', NULL, ?, ?, ?)");
+  const updateUser = db.prepare("UPDATE users SET full_name = ?, grp = ?, profile = ? WHERE id = ? AND role = 'student'");
+  const addRequest = db.prepare('INSERT INTO requests (user_id,no,title,purpose,status,note,created,updated,seen) VALUES (?,?,?,?,?,?,?,?,1)');
+  const requestExists = db.prepare('SELECT id FROM requests WHERE user_id = ? AND no = ?');
+  db.exec('BEGIN');
+  try {
+    for (const item of (catalog.students || [])) {
+      if (!item || !/^[a-z0-9-]{3,40}$/i.test(item.login || '') || !item.full || !item.grp || !item.profile) continue;
+      let row = findUser.get(item.login);
+      if (!row) {
+        const result = addUser.run(item.login, item.full, item.grp, JSON.stringify(item.profile));
+        row = { id: Number(result.lastInsertRowid), role: 'student', full_name: item.full, grp: item.grp, profile: JSON.stringify(item.profile) };
+      } else if (row.role === 'student') {
+        let existing = {};
+        try { existing = JSON.parse(row.profile || '{}'); } catch {}
+        const supplied = item.profile || {};
+        // Демо-профиль дополняется только пустыми полями; уже сохранённые значения не затираются.
+        for (const [key, value] of Object.entries(supplied)) {
+          if (existing[key] === undefined || existing[key] === null || existing[key] === '') existing[key] = value;
+        }
+        const fullName = row.full_name || item.full;
+        const group = row.grp || item.grp;
+        updateUser.run(fullName, group, JSON.stringify(existing), row.id);
+        row.profile = JSON.stringify(existing);
+      }
+      if (row?.role !== 'student') continue;
+      for (const req of (item.requests || [])) {
+        if (!req.no || requestExists.get(row.id, req.no)) continue;
+        const at = Date.parse(req.at);
+        if (!Number.isFinite(at)) continue;
+        addRequest.run(row.id, req.no, req.title, req.purpose || null, req.status || 'wait', req.note || null, at, at);
+      }
+    }
+    for (const req of (catalog.additionalRequests || [])) {
+      const user = findUser.get(req.login);
+      if (!user || user.role !== 'student' || !req.no || requestExists.get(user.id, req.no)) continue;
+      const at = Date.parse(req.at);
+      if (!Number.isFinite(at)) continue;
+      addRequest.run(user.id, req.no, req.title, req.purpose || null, req.status || 'wait', req.note || null, at, at);
+    }
+    db.exec('COMMIT');
+    console.log(`Каталог методиста синхронизирован: ${(catalog.students || []).length} демо-карточек`);
+  } catch (e) { db.exec('ROLLBACK'); throw e; }
+} catch (e) { console.error('Не удалось синхронизировать каталог методиста:', e.message); }
 
 /* ---------- утилиты ---------- */
 const sha256 = s => crypto.createHash('sha256').update(s).digest('hex');
@@ -183,8 +260,36 @@ function currentUser(req) {
 function reqView(r) {
   return { id: r.id, no: r.no, t: r.title, purpose: r.purpose || '', st: r.status, note: r.note || '', when: fmtWhen(r.created), upd: r.seen ? 0 : 1 };
 }
+function effectiveProfile(login, profile) {
+  if (login !== 'student1' || !Array.isArray(profile.L)) return profile;
+  const L = profile.L.map(day => day.map(lesson => ({ ...lesson,
+    a: Array.isArray(lesson.a) ? [...lesson.a] : lesson.a,
+    b: Array.isArray(lesson.b) ? [...lesson.b] : lesson.b,
+    ch: lesson.ch ? { ...lesson.ch } : undefined
+  })));
+  const find = (day, id, predicate) => L[day]?.find(x => x.id === id) || L[day]?.find(predicate);
+
+  // Демонстрационные изменения расписания Анастасии. Применяются к профилю,
+  // который уже хранится в постоянной БД, без изменения самой БД.
+  const english = find(1, 'a-tue3', x => x.t === 'Иностранный язык (английский)' && x.k === 'Семинар' && x.a?.[0] === 12);
+  if (english) {
+    english.r = 'Корпус 1, ауд. 112';
+    english.ch = { type: 'room', old: 'Корпус 1, ауд. 214', why: 'аудитория изменена деканатом' };
+  }
+  const lawLecture = find(2, 'a-wed2', x => x.t === 'Гражданское право' && x.k === 'Лекция');
+  if (lawLecture) {
+    lawLecture.a = [10, 10]; lawLecture.b = [11, 30];
+    lawLecture.ch = { type: 'time', old: [[10, 40], [12, 0]], why: 'изменение расписания деканатом' };
+  }
+  const gmuLecture = find(3, 'a-thu1', x => x.t === 'Основы государственного и муниципального управления' && x.k === 'Лекция');
+  if (gmuLecture) {
+    gmuLecture.p = 'Ковалёв А. П.';
+    gmuLecture.ch = { type: 'teacher', old: 'Соколова Е. А.', why: 'замена преподавателя' };
+  }
+  return { ...profile, L };
+}
 function meView(u) {
-  const p = JSON.parse(u.profile);
+  const p = effectiveProfile(u.login, JSON.parse(u.profile));
   if (u.role === 'staff') return { role: 'staff', login: u.login, name: u.full_name, ...p };
   return { role: 'student', login: u.login, ...p };
 }
@@ -192,16 +297,21 @@ const ALLOWED_REQ = ['Справка об обучении', 'Справка д�
 
 /* ---------- ИИ-помощник (ключ только на сервере, в переменных окружения) ---------- */
 function studentContext(u) {
-  const p = JSON.parse(u.profile);
+  const p = effectiveProfile(u.login, JSON.parse(u.profile));
   const days = ['Пн','Вт','Ср','Чт','Пт','Сб'];
   const f = a => `${String(a[0]).padStart(2,'0')}:${String(a[1]).padStart(2,'0')}`;
   const sched = (p.L || []).map((d, i) => `${days[i]}: ${d.length ? d.map(l => `${f(l.a)} ${l.t} (${l.k}, ${l.r}, ${l.p})${l.ch ? ' [изменение: ' + (l.ch.type === 'cancel' ? 'отменена' : l.ch.type) + ']' : ''}`).join('; ') : 'нет пар'}`).join('\n');
   const disc = (p.disc2 || []).map(d => `${d.t}: ${d.pts}/100 БРС, ${d.c}, пропусков ${d.miss.length}${d.pts < 60 ? ', НЕТ ДОПУСКА' : ''}`).join('\n');
   const ses = (p.ses || []).map(s => `${p.disc2[s.d].t} — ${p.disc2[s.d].c}, ${s.date} ${s.time}, ${s.room}`).join('\n');
   const reqs = db.prepare('SELECT * FROM requests WHERE user_id = ? ORDER BY created DESC LIMIT 5').all(u.id).map(r => `${r.title} ${r.purpose || ''} — ${r.status}`).join('\n') || 'нет';
+  const now = new Date();
+  const campusDate = new Intl.DateTimeFormat('ru-RU', { timeZone: 'Europe/Moscow', weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }).format(now);
+  const campusTime = new Intl.DateTimeFormat('ru-RU', { timeZone: 'Europe/Moscow', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(now);
+  const campusWeekday = new Intl.DateTimeFormat('en-US', { timeZone: 'Europe/Moscow', weekday: 'short' }).format(now);
+  const campusWeekNum = Math.floor((Date.UTC(...(() => { const f = new Intl.DateTimeFormat('en-CA', {timeZone:'Europe/Moscow',year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(now); const o={}; for (const x of f) if(x.type!=='literal') o[x.type]=+x.value; return [o.year,o.month-1,o.day]; })()) - Date.UTC(2026,10,9)) / 604800000);
   return `Студент: ${p.full}, ${p.course} курс, группа ${p.grp}, ${p.fac}, ${p.dir}.
-Сегодня (демо-дата) вторник, 10 ноября 2026, 12:07. Неделя нечётная.
-Расписание этой недели:\n${sched}\nБаллы и посещаемость:\n${disc}\nСессия:\n${ses}\nЗаявки:\n${reqs}`;
+Текущая дата и время кампуса: ${campusDate}, ${campusTime} МСК. День недели: ${campusWeekday}. Учебная неделя: ${campusWeekNum + 11}.
+Расписание профиля (по учебным дням):\n${sched}\nБаллы и посещаемость:\n${disc}\nСессия:\n${ses}\nЗаявки:\n${reqs}`;
 }
 const AI_SYSTEM = `Ты — ИИ-помощник «Спроси деканат» в личном кабинете студента (концепт для конкурса, данные вымышлены).
 Отвечай по-русски, коротко (до 5 предложений), дружелюбно и по делу, опираясь ТОЛЬКО на данные студента ниже.
@@ -251,6 +361,8 @@ async function api(req, res, url) {
     if (origin && new URL(origin).host !== req.headers.host) return send(res, 403, { error: 'Запрос отклонён' });
   }
   if (p === '/api/health') return send(res, 200, { ok: true });
+  // Серверное время — единая точка отсчёта для календаря кампуса (Москва).
+  if (p === '/api/clock' && m === 'GET') return send(res, 200, { now: Date.now(), timeZone: 'Europe/Moscow' });
 
   if (p === '/api/login' && m === 'POST') {
     const b = await readJson(req, 4096);
@@ -299,6 +411,36 @@ async function api(req, res, url) {
     db.prepare('INSERT INTO state (user_id, data) VALUES (?,?) ON CONFLICT(user_id) DO UPDATE SET data = excluded.data').run(u.id, JSON.stringify(clean));
     return send(res, 200, { ok: true });
   }
+  if (p === '/api/submissions' && m === 'GET') {
+    const rows = db.prepare('SELECT task_id, task_title, file_name, mime_type, size, created FROM submissions WHERE user_id = ? ORDER BY created DESC').all(u.id);
+    return send(res, 200, rows);
+  }
+  if (p === '/api/submissions' && m === 'POST') {
+    if (u.role !== 'student') return send(res, 403, { error: 'Сдавать работы могут только студенты' });
+    const b = await readJson(req, 7 * 1024 * 1024);
+    const taskId = str(b.taskId, 80), taskTitle = str(b.taskTitle, 180), fileName = str(b.fileName, 180);
+    const ext = path.extname(fileName).toLowerCase();
+    const allowed = new Set(['.ppt', '.pptx', '.pdf', '.doc', '.docx', '.txt', '.rtf', '.odt']);
+    if (!taskId || !taskTitle || !fileName || !allowed.has(ext)) return send(res, 400, { error: 'Поддерживаются PPT, PPTX, PDF, DOC, DOCX, TXT, RTF и ODT' });
+    if (typeof b.data !== 'string' || !/^data:[^;]+;base64,/.test(b.data)) return send(res, 400, { error: 'Файл не получен' });
+    const base64 = b.data.slice(b.data.indexOf(',') + 1);
+    if (base64.length > 7.05 * 1024 * 1024) return send(res, 413, { error: 'Файл слишком большой. Максимум — 5 МБ' });
+    const bytes = Buffer.from(base64, 'base64');
+    if (!bytes.length || bytes.length > 5 * 1024 * 1024) return send(res, 413, { error: 'Файл слишком большой. Максимум — 5 МБ' });
+    const mime = str(b.mimeType, 120) || 'application/octet-stream';
+    const storedName = crypto.randomBytes(18).toString('hex') + ext;
+    const target = path.join(SUBMISSIONS_DIR, storedName);
+    fs.writeFileSync(target, bytes, { flag: 'wx', mode: 0o600 });
+    try {
+      const prev = db.prepare('SELECT stored_name FROM submissions WHERE user_id = ? AND task_id = ?').get(u.id, taskId);
+      db.prepare(`INSERT INTO submissions (user_id,task_id,task_title,file_name,stored_name,mime_type,size,created)
+        VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(user_id,task_id) DO UPDATE SET task_title=excluded.task_title,file_name=excluded.file_name,stored_name=excluded.stored_name,mime_type=excluded.mime_type,size=excluded.size,created=excluded.created`)
+        .run(u.id, taskId, taskTitle, fileName, storedName, mime, bytes.length, Date.now());
+      if (prev?.stored_name) { try { fs.unlinkSync(path.join(SUBMISSIONS_DIR, prev.stored_name)); } catch {} }
+    } catch (e) { try { fs.unlinkSync(target); } catch {} throw e; }
+    return send(res, 201, { ok: true, taskId, taskTitle, fileName, mimeType: mime, size: bytes.length, created: Date.now() });
+  }
+
   if (p === '/api/requests' && m === 'GET') {
     return send(res, 200, db.prepare('SELECT * FROM requests WHERE user_id = ? ORDER BY created DESC, id DESC').all(u.id).map(reqView));
   }
@@ -337,6 +479,43 @@ async function api(req, res, url) {
       console.error('AI error:', e.message);
       return send(res, 200, { fallback: true });
     }
+  }
+
+  /* --- сотрудник деканата: каталог студентов и учебные карточки --- */
+  if (p === '/api/staff/students' && m === 'GET') {
+    const rows = db.prepare("SELECT id, login, full_name, grp, profile FROM users WHERE role = 'student' ORDER BY full_name").all();
+    const students = rows.flatMap(row => {
+      let profile = {}; try { profile = JSON.parse(row.profile || '{}'); } catch {}
+      // В каталог попадают все демо-профили с заполненными сведениями об обучении.
+      if (!Number.isFinite(Number(profile.course)) || !profile.fac || !profile.dir) return [];
+      const requestCounts = db.prepare("SELECT SUM(CASE WHEN status IN ('wait','work') THEN 1 ELSE 0 END) AS active, COUNT(*) AS total FROM requests WHERE user_id = ?").get(row.id);
+      return [{ id: row.id, login: row.login, name: row.full_name, grp: row.grp || '', course: profile.course, faculty: profile.fac, direction: profile.dir, average: profile.avg || '—', attendance: Number.isFinite(Number(profile.att)) ? Number(profile.att) : null, brs: Number.isFinite(Number(profile.brs)) ? Number(profile.brs) : null, activeRequests: Number(requestCounts.active || 0), requestsTotal: Number(requestCounts.total || 0) }];
+    });
+    return send(res, 200, students);
+  }
+  const staffSubmissionMatch = p.match(/^\/api\/staff\/submissions\/(\d+)$/);
+  if (staffSubmissionMatch && m === 'GET') {
+    const file = db.prepare('SELECT file_name, stored_name, size FROM submissions WHERE id = ?').get(Number(staffSubmissionMatch[1]));
+    if (!file) return send(res, 404, { error: 'Файл не найден' });
+    const stored = path.basename(file.stored_name);
+    if (stored !== file.stored_name || !/^[a-f0-9]{36}\.[a-z0-9]+$/.test(stored)) return send(res, 404, { error: 'Файл не найден' });
+    const target = path.join(SUBMISSIONS_DIR, stored);
+    if (!fs.existsSync(target)) return send(res, 404, { error: 'Файл больше недоступен' });
+    const safeName = encodeURIComponent(String(file.file_name).replace(/[\r\n\"']/g, '_'));
+    res.writeHead(200, { 'Content-Type': 'application/octet-stream', 'Content-Length': file.size, 'Content-Disposition': `attachment; filename*=UTF-8''${safeName}`, 'Cache-Control': 'no-store', ...SEC_HEADERS });
+    return fs.createReadStream(target).pipe(res);
+  }
+
+  const studentDetailMatch = p.match(/^\/api\/staff\/students\/(\d+)$/);
+  if (studentDetailMatch && m === 'GET') {
+    const row = db.prepare("SELECT id, login, full_name, grp, profile FROM users WHERE id = ? AND role = 'student'").get(Number(studentDetailMatch[1]));
+    if (!row) return send(res, 404, { error: 'Студент не найден' });
+    let profile = {}; try { profile = JSON.parse(row.profile || '{}'); } catch {}
+    if (!Number.isFinite(Number(profile.course)) || !profile.fac || !profile.dir) return send(res, 404, { error: 'Учебный профиль не заполнен' });
+    const requests = db.prepare('SELECT * FROM requests WHERE user_id = ? ORDER BY created DESC LIMIT 10').all(row.id).map(reqView);
+    const submissions = db.prepare('SELECT id, task_id, task_title, file_name, mime_type, size, created FROM submissions WHERE user_id = ? ORDER BY created DESC LIMIT 20').all(row.id);
+    const safe = { id: row.id, login: row.login, full: row.full_name, grp: row.grp || '', course: profile.course, fac: profile.fac, dir: profile.dir, prof: profile.prof || '', form: profile.form || '', email: profile.email || '', curator: profile.curator || '', avg: profile.avg || '—', att: profile.att ?? null, brs: profile.brs ?? null, disc2: Array.isArray(profile.disc2) ? profile.disc2 : [], L: Array.isArray(profile.L) ? effectiveProfile(row.login, profile).L : [], Lb: Array.isArray(profile.Lb) ? profile.Lb : [], tasks: Array.isArray(profile.tasks) ? profile.tasks.map(x => ({ id: x.id, t: x.t, s: x.s, due: x.due })) : [], ses: Array.isArray(profile.ses) ? profile.ses : [], requests, submissions };
+    return send(res, 200, safe);
   }
 
   /* --- сотрудник деканата --- */
@@ -403,4 +582,4 @@ const server = http.createServer(async (req, res) => {
     send(res, 500, { error: 'Внутренняя ошибка сервера' });
   }
 });
-server.listen(PORT, () => console.log(`Цифровой деканат запущен: http://localhost:${PORT}`));
+server.listen(PORT, '0.0.0.0', () => console.log(`Цифровой деканат запущен на 0.0.0.0:${PORT}`));
